@@ -1,0 +1,35 @@
+version: '3.5'
+
+services:
+
+  redis:
+    image: redis:6.2-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - modak-net
+  api:
+    depends_on:
+      - redis
+    volumes:
+      - .:/go/src/github.com/jordanlanch/modak-test
+    env_file:
+      - .env
+    build:
+      context: ./
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8080:8080"
+    networks:
+      - modak-net
+
+
+networks:
+  modak-net:
+    external: true
+    name: modak-net
