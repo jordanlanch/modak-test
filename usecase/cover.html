@@ -120,51 +120,59 @@ import (
         "context"
         "fmt"
         "log"
+        "time"
 
         "github.com/go-redis/redis/v8"
         "github.com/jordanlanch/modak-test/domain"
 )
 
+type RateLimitRule struct {
+        Limit    int64
+        Duration time.Duration
+}
+
 type RedisRateLimiter struct {
-        rdb *redis.Client
+        rdb   *redis.Client
+        rules map[string]RateLimitRule
 }
 
 func NewRedisRateLimiter(rdb *redis.Client) domain.RateLimiter <span class="cov1" title="1">{
-        return &amp;RedisRateLimiter{rdb}
+        return &amp;RedisRateLimiter{
+                rdb: rdb,
+                rules: map[string]RateLimitRule{
+                        "Status":    {Limit: 2, Duration: time.Minute},
+                        "News":      {Limit: 1, Duration: 24 * time.Hour},
+                        "Marketing": {Limit: 3, Duration: time.Hour},
+                },
+        }
 }</span>
 
-func (rl *RedisRateLimiter) Allow(ctx context.Context, recipient, messageType string) bool <span class="cov10" title="4">{
-        key := fmt.Sprintf("%s:%s", recipient, messageType)
-        result, err := rl.rdb.Get(ctx, key).Int()
-        if err == redis.Nil </span><span class="cov1" title="1">{
-                // If no key exists, no messages have been sent yet.
+func (rl *RedisRateLimiter) Allow(ctx context.Context, recipient, messageType string) bool <span class="cov10" title="19">{
+        rule, exists := rl.rules[messageType]
+        if !exists </span><span class="cov0" title="0">{
                 return true
-        }</span> else<span class="cov8" title="3"> if err != nil </span><span class="cov1" title="1">{
-                // Handle Redis errors appropriately.
+        }</span>
+
+        <span class="cov10" title="19">key := fmt.Sprintf("rate_limit:%s:%s", recipient, messageType)
+
+        newCount, err := rl.rdb.Incr(ctx, key).Result()
+        if err != nil </span><span class="cov1" title="1">{
                 log.Printf("Redis error: %v", err)
                 return false
         }</span>
 
-        // Check if the result exceeds the limit.
-        <span class="cov5" title="2">if result &gt;= rl.getLimit(messageType) </span><span class="cov1" title="1">{
-                // Here, rather than just returning false, you might consider returning an error or setting an error state.
+        <span class="cov9" title="18">if newCount == 1 </span><span class="cov7" title="9">{
+                if _, err := rl.rdb.Expire(ctx, key, rule.Duration).Result(); err != nil </span><span class="cov0" title="0">{
+                        log.Printf("Failed to set expiration for %s: %v", key, err)
+                        return false
+                }</span>
+        }
+
+        <span class="cov9" title="18">if newCount &gt; rule.Limit </span><span class="cov4" title="3">{
                 return false
         }</span>
 
-        <span class="cov1" title="1">return true</span>
-}
-
-func (rl *RedisRateLimiter) getLimit(messageType string) int <span class="cov5" title="2">{
-        switch messageType </span>{
-        case "Status":<span class="cov5" title="2">
-                return 2</span>
-        case "News":<span class="cov0" title="0">
-                return 1</span>
-        case "Marketing":<span class="cov0" title="0">
-                return 3</span>
-        default:<span class="cov0" title="0">
-                return 5</span> // Default limit
-        }
+        <span class="cov9" title="15">return true</span>
 }
 </pre>
 		

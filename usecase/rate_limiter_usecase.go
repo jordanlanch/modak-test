@@ -4,49 +4,57 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/jordanlanch/modak-test/domain"
 )
 
+type RateLimitRule struct {
+	Limit    int64
+	Duration time.Duration
+}
+
 type RedisRateLimiter struct {
-	rdb *redis.Client
+	rdb   *redis.Client
+	rules map[string]RateLimitRule
 }
 
 func NewRedisRateLimiter(rdb *redis.Client) domain.RateLimiter {
-	return &RedisRateLimiter{rdb}
+	return &RedisRateLimiter{
+		rdb: rdb,
+		rules: map[string]RateLimitRule{
+			"Status":    {Limit: 2, Duration: time.Minute},
+			"News":      {Limit: 1, Duration: 24 * time.Hour},
+			"Marketing": {Limit: 3, Duration: time.Hour},
+		},
+	}
 }
 
 func (rl *RedisRateLimiter) Allow(ctx context.Context, recipient, messageType string) bool {
-	key := fmt.Sprintf("%s:%s", recipient, messageType)
-	result, err := rl.rdb.Get(ctx, key).Int()
-	if err == redis.Nil {
-		// If no key exists, no messages have been sent yet.
+	rule, exists := rl.rules[messageType]
+	if !exists {
 		return true
-	} else if err != nil {
-		// Handle Redis errors appropriately.
+	}
+
+	key := fmt.Sprintf("rate_limit:%s:%s", recipient, messageType)
+
+	newCount, err := rl.rdb.Incr(ctx, key).Result()
+	if err != nil {
 		log.Printf("Redis error: %v", err)
 		return false
 	}
 
-	// Check if the result exceeds the limit.
-	if result >= rl.getLimit(messageType) {
-		// Here, rather than just returning false, you might consider returning an error or setting an error state.
+	if newCount == 1 {
+		if _, err := rl.rdb.Expire(ctx, key, rule.Duration).Result(); err != nil {
+			log.Printf("Failed to set expiration for %s: %v", key, err)
+			return false
+		}
+	}
+
+	if newCount > rule.Limit {
 		return false
 	}
 
 	return true
-}
-
-func (rl *RedisRateLimiter) getLimit(messageType string) int {
-	switch messageType {
-	case "Status":
-		return 2
-	case "News":
-		return 1
-	case "Marketing":
-		return 3
-	default:
-		return 5 // Default limit
-	}
 }
